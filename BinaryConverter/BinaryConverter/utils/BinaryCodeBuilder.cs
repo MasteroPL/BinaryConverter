@@ -5,11 +5,9 @@ using System.Text;
 namespace BinaryConverter.utils
 {
 	/// <summary>
-	/// Can be used in two ways
-	/// 1. Similarly to StringBuilder, you can use it to create a binary chain bit by bit
-	/// 2. Similarly to file reader, you can use it to read the binary chain bit by bit
+	/// Similarly to StringBuilder, you can use it to create a binary chain bit by bit, byte by byte or mixing the two
 	/// </summary>
-	public class BinaryCodeStorer
+	public class BinaryCodeBuilder
 	{
 		/// <summary>
 		/// Points at the current byte position
@@ -24,7 +22,7 @@ namespace BinaryConverter.utils
 		/// </summary>
 		private List<byte> Bytes = new List<byte>();
 
-		public BinaryCodeStorer(IEnumerable<byte> initialBytesSet = null) {
+		public BinaryCodeBuilder(IEnumerable<byte> initialBytesSet = null) {
 			if (initialBytesSet != null) {
 				Bytes.AddRange(initialBytesSet);
 			}
@@ -34,7 +32,7 @@ namespace BinaryConverter.utils
 		/// Adds a single bit to the chain at current pointer location
 		/// </summary>
 		/// <param name="bit">Single bit value</param>
-		public void AddBit(byte bit) {
+		public void AppendBit(byte bit) {
 			if(bit != 0 && bit != 1) {
 				throw new ArgumentOutOfRangeException("bit argument can only take values of 0 and 1");
 			}
@@ -59,10 +57,10 @@ namespace BinaryConverter.utils
 			}
 		}
 		/// <summary>
-		/// Adds a series of bits to the chain at the current pointer location
+		/// Adds a series of bits to the chain at the current pointer position
 		/// </summary>
 		/// <param name="bits">List of bits to add</param>
-		public void AddBits(IEnumerable<byte> bits) {
+		public void AppendBits(IEnumerable<byte> bits) {
 			int count = 0;
 			foreach (var b in bits) {
 				if (b != 0 && b != 1) {
@@ -113,10 +111,10 @@ namespace BinaryConverter.utils
 			CurrentWriteBytePointer = tmpBytePointer;
 		}
 		/// <summary>
-		/// Adds 8 bits to the chain at current pointer location
+		/// Adds 8 bits to the chain at current pointer position
 		/// </summary>
 		/// <param name="value">Byte to add</param>
-		public void AddByte(byte value) {
+		public void AppendByte(byte value) {
 			while(Bytes.Count <= CurrentWriteBytePointer) {
 				Bytes.Add(0);
 			}
@@ -140,10 +138,10 @@ namespace BinaryConverter.utils
 			CurrentWriteBytePointer++;
 		}
 		/// <summary>
-		/// 
+		/// Adds 8 bits to the chain at current pointer position
 		/// </summary>
 		/// <param name="bytes"></param>
-		public void AddBytes(IEnumerable<byte> bytes) {
+		public void AppendBytes(IEnumerable<byte> bytes) {
 			while (Bytes.Count <= CurrentWriteBytePointer) {
 				Bytes.Add(0);
 			}
@@ -151,6 +149,7 @@ namespace BinaryConverter.utils
 			int tmpBytePointer = CurrentWriteBytePointer;
 			byte tmpBitPointer = CurrentWriteBitPointer;
 
+			// Simple case -> just add the bytes at proper indices
 			if (CurrentWriteBitPointer == 0) {
 				foreach (var b in bytes) {
 					if (tmpBytePointer == Bytes.Count) {
@@ -162,10 +161,10 @@ namespace BinaryConverter.utils
 					tmpBytePointer++;
 				}
 			}
+			// Complex case -> Every byte will be split into 2 indices
 			else {
-				// TODO
 				foreach(var b in bytes) {
-
+					AppendByte(b);
 				}
 			}
 
@@ -184,6 +183,10 @@ namespace BinaryConverter.utils
 				}
 			}
 			Console.WriteLine();
+		}
+
+		public List<byte> ToBytes() {
+			return this.Bytes;
 		}
 	}
 }

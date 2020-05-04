@@ -7,7 +7,7 @@ namespace DebugConsole
 	class Program
 	{
 		static void Main(string[] args) {
-			var storer = new BinaryCodeStorer();
+			var storer = new BinaryCodeBuilder();
 
 			var a = new byte[] {
 				0, 1, 1, 0, 0
@@ -18,9 +18,9 @@ namespace DebugConsole
 			var c = new byte[] {
 				0, 0, 0, 1, 1, 1, 0, 0, 0, 1, 1, 1, 0, 0, 0, 1, 1, 1, 0, 0, 0, 1, 1, 1, 0, 0, 0, 1, 1, 1, 0, 0, 0, 1, 1, 1
 			};
-			storer.AddBits(a);
-			storer.AddBits(b);
-			storer.AddBits(c);
+			storer.AppendBits(a);
+			storer.AppendBits(b);
+			storer.AppendBits(c);
 
 			storer.Print();
 		}
