@@ -19,7 +19,7 @@ namespace BinaryConverter.models
 
 			SourceArray = sourceArray;
 			Iterator = SourceArray.GetEnumerator();
-			IsEndOfSource = SourceArray.Count() == 0;
+			IsEndOfSource = !Iterator.MoveNext();
 		}
 
 		public byte GetNextByte() {
@@ -28,7 +28,7 @@ namespace BinaryConverter.models
 			}
 
 			byte current = Iterator.Current;
-			IsEndOfSource = Iterator.MoveNext();
+			IsEndOfSource = !Iterator.MoveNext();
 			return current;
 		}
 

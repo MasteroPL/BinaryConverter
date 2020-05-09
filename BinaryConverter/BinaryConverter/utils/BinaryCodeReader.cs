@@ -90,5 +90,9 @@ namespace BinaryConverter.utils
 
 			return result;
 		}
+
+		public bool EndOfSource() {
+			return Source.EndOfSource();
+		}
 	}
 }
