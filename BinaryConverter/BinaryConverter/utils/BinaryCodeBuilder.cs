@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Text;
 
 namespace BinaryConverter.utils
@@ -10,13 +11,9 @@ namespace BinaryConverter.utils
 	public class BinaryCodeBuilder
 	{
 		/// <summary>
-		/// Points at the current byte position
-		/// </summary>
-		private int CurrentWriteBytePointer = 0;
-		/// <summary>
 		/// Points at the current bit position in the current byte (takes values only from range 0-7)
 		/// </summary>
-		private byte CurrentWriteBitPointer = 0;
+		private byte BitPointer = 0;
 		/// <summary>
 		/// Stored bytes
 		/// </summary>
@@ -29,147 +26,57 @@ namespace BinaryConverter.utils
 		}
 
 		/// <summary>
-		/// Adds a single bit to the chain at current pointer location
+		/// Adds a single bit to the chain
 		/// </summary>
 		/// <param name="bit">Single bit value</param>
 		public void AppendBit(byte bit) {
-			if(bit != 0 && bit != 1) {
+			if(bit > 1) {
 				throw new ArgumentOutOfRangeException("bit argument can only take values of 0 and 1");
 			}
 
-			// Filling in missing bytes
-			while(Bytes.Count <= CurrentWriteBytePointer) {
-				Bytes.Add(0);
+			if(BitPointer == 0) {
+				Bytes.Add(bit);
+			}
+			else if(bit == 1) {
+				Bytes[Bytes.Count - 1] += (byte)(1 << BitPointer);
 			}
 
-			byte tmp = bit;
-			tmp = (byte)(tmp << CurrentWriteBitPointer);
-
-			byte highPart = (byte)(1 << CurrentWriteBitPointer);
-			byte lowPart = (byte)(~((~0) << (CurrentWriteBitPointer)));
-
-			Bytes[CurrentWriteBytePointer] = (byte)((Bytes[CurrentWriteBytePointer] & lowPart) + (tmp & highPart));
-
-			CurrentWriteBitPointer++;
-			if(CurrentWriteBitPointer == 8) {
-				CurrentWriteBitPointer = 0;
-				CurrentWriteBytePointer++;
-			}
+			BitPointer++;
+			if (BitPointer == 8) BitPointer = 0;
 		}
 		/// <summary>
-		/// Adds a series of bits to the chain at the current pointer position
+		/// Adds a series of bits to the chain
 		/// </summary>
 		/// <param name="bits">List of bits to add</param>
 		public void AppendBits(IEnumerable<byte> bits) {
-			int count = 0;
-			foreach (var b in bits) {
-				if (b != 0 && b != 1) {
-					throw new ArgumentOutOfRangeException("bit argument can only take values of 0 and 1");
-				}
-				count++;
+			foreach(byte b in bits) {
+				AppendBit(b);
 			}
-
-			var spaceLeftAfterAdding = Bytes.Count * 8 - (CurrentWriteBytePointer) * 8 - CurrentWriteBitPointer - count;
-			while(spaceLeftAfterAdding < 0) {
-				Bytes.Add(0);
-				spaceLeftAfterAdding += 8;
-			}
-
-			var tmpBitPointer = CurrentWriteBitPointer;
-			var tmpBytePointer = CurrentWriteBytePointer;
-			bool firstByte = true;
-			int current = 0;
-
-			// For one time use only
-			byte lowPart = (byte)(~((~0) << (CurrentWriteBitPointer)));
-
-			foreach (var b in bits) {
-				current += (b << tmpBitPointer);
-
-				tmpBitPointer++;
-				if(tmpBitPointer == 8) {
-					if (firstByte) {
-						Bytes[tmpBytePointer] = (byte)((Bytes[tmpBytePointer] & lowPart) + current);
-						firstByte = false;
-						current = 0;
-					}
-					else {
-						Bytes[tmpBytePointer] = (byte)current;
-						current = 0;
-					}
-
-					tmpBitPointer = 0;
-					tmpBytePointer++;
-				}
-			}
-
-			if(tmpBitPointer != 0) {
-				Bytes[tmpBytePointer] = (byte)current;
-			}
-
-			CurrentWriteBitPointer = tmpBitPointer;
-			CurrentWriteBytePointer = tmpBytePointer;
 		}
 		/// <summary>
-		/// Adds 8 bits to the chain at current pointer position
+		/// Adds 8 bits to the chain
 		/// </summary>
 		/// <param name="value">Byte to add</param>
 		public void AppendByte(byte value) {
-			while(Bytes.Count <= CurrentWriteBytePointer) {
-				Bytes.Add(0);
-			}
-
-			if (CurrentWriteBitPointer == 0) {
-				Bytes[CurrentWriteBytePointer] = value;
+			if (BitPointer == 0) {
+				Bytes.Add(value);
 			}
 			else {
-				if(Bytes.Count <= CurrentWriteBytePointer + 1) {
-					Bytes.Add(0);
-				}
+				byte firstPart = (byte)(value << BitPointer);
+				byte secondPart = (byte)(value >> (8 - BitPointer));
 
-				byte lowPart = (byte)(~((~0) << (CurrentWriteBitPointer)));
-				byte firstByteValue = (byte)((value << CurrentWriteBitPointer) & 255);
-				byte secondByteValue = (byte)(value >> (8 - CurrentWriteBitPointer));
-
-				Bytes[CurrentWriteBytePointer] = (byte)((Bytes[CurrentWriteBytePointer] & lowPart) + firstByteValue);
-				Bytes[CurrentWriteBytePointer + 1] = secondByteValue;
+				Bytes[Bytes.Count - 1] += firstPart;
+				Bytes.Add(secondPart);
 			}
-
-			CurrentWriteBytePointer++;
 		}
 		/// <summary>
 		/// Adds 8 bits to the chain at current pointer position
 		/// </summary>
 		/// <param name="bytes"></param>
 		public void AppendBytes(IEnumerable<byte> bytes) {
-			while (Bytes.Count <= CurrentWriteBytePointer) {
-				Bytes.Add(0);
+			foreach(byte b in bytes) {
+				AppendByte(b);
 			}
-
-			int tmpBytePointer = CurrentWriteBytePointer;
-			byte tmpBitPointer = CurrentWriteBitPointer;
-
-			// Simple case -> just add the bytes at proper indices
-			if (CurrentWriteBitPointer == 0) {
-				foreach (var b in bytes) {
-					if (tmpBytePointer == Bytes.Count) {
-						Bytes.Add(b);
-					}
-					else {
-						Bytes[tmpBytePointer] = b;
-					}
-					tmpBytePointer++;
-				}
-			}
-			// Complex case -> Every byte will be split into 2 indices
-			else {
-				foreach(var b in bytes) {
-					AppendByte(b);
-				}
-			}
-
-			CurrentWriteBitPointer = tmpBitPointer;
-			CurrentWriteBytePointer = tmpBytePointer;
 		}
 
 		public void Print() {
