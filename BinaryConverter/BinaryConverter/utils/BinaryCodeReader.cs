@@ -24,7 +24,7 @@ namespace BinaryConverter.utils
 				throw new ArgumentNullException("Source cannot be a null instance");
 			}
 
-			Source = new ByteArrayReadable(source);
+			Source = new ByteArrayReader(source);
 		}
 		/// <summary>
 		/// Reads next single bit from the source
