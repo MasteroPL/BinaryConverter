@@ -1,4 +1,5 @@
-﻿using System;
+﻿using BinaryConverter.models;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
@@ -94,6 +95,10 @@ namespace BinaryConverter.utils
 
 		public List<byte> ToBytes() {
 			return this.Bytes;
+		}
+
+		public ByteArrayReader ToByteArrayReadable() {
+			return new ByteArrayReader(this.Bytes);
 		}
 	}
 }
