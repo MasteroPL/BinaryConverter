@@ -8,10 +8,10 @@ namespace BinaryConverter.attributes
 	/// Defines binary encoder for the entire class
 	/// </summary>
 	[AttributeUsage(AttributeTargets.Class, Inherited=true, AllowMultiple=false)]
-	public class ClassBinaryEncoderAttribute : Attribute {
+	public class ClassEncoderAttribute : Attribute {
 		public Func<object, IEnumerable<byte>> Encoder { get; protected set; }
 
-		public ClassBinaryEncoderAttribute(Func<object, IEnumerable<byte>> encoder) {
+		public ClassEncoderAttribute(Func<object, IEnumerable<byte>> encoder) {
 			Encoder = encoder;
 		}
 	}
