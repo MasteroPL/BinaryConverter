@@ -42,6 +42,8 @@ namespace BinaryConverter.utils
 			conjuctor = (conjuctor << BitPointer);
 			result = (byte)((CurrentByte & conjuctor) >> BitPointer);
 
+			BitPointer = (BitPointer == 7) ? (byte)0 : (byte)(BitPointer + 1);
+
 			return result;
 		}
 		/// <summary>
