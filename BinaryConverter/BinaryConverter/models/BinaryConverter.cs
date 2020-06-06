@@ -5,6 +5,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Runtime.Serialization.Formatters.Binary;
 using System.Text;
@@ -39,9 +40,11 @@ namespace BinaryConverter.models
 		private BinaryDecoderMethod[] _predefinedDefaultDecoders;
 
 		public Encoding StringEncoding { get; set; }
+		public Encoding CodeEncoding { get; set; }
 
-		public BinaryConverter(Encoding stringEncoding = null) {
+		public BinaryConverter(Encoding stringEncoding = null, Encoding codeEncoding = null) {
 			StringEncoding = (stringEncoding == null) ? Encoding.UTF8 : stringEncoding; // default encoding
+			CodeEncoding = (codeEncoding == null) ? Encoding.UTF8 : codeEncoding; // default encoding
 
 			// Temporary
 			_predefinedCustomEncoders = new BinaryEncoderMethod[] { };
@@ -50,26 +53,62 @@ namespace BinaryConverter.models
 			_predefinedDefaultDecoders = new BinaryDecoderMethod[] { };
 		}
 
+		protected byte GetNumberOfBytesToStoreLength(uint length) {
+			byte lengthSizeInBytes;
+			if (length < 256) { return 1; } // length < 2^8
+			else if (length < 65536) { return 2; } // length < 2^16
+			else if (length < 16777216) { return 3; } // length < 2^24
+			else { return 4; }
+		}
+
+		#region Converter Functionalities Encoders
 		/// <summary>
 		/// Encoder specifically dedicated to encoding Type
 		/// </summary>
 		/// <param name="type">Type to convert</param>
 		/// <returns>Bytes representation of of the type</returns>
-		protected byte[] EncodeType(Type type) {
+		public byte[] EncodeType(Type type) {
 
 			//string encoded = type.FullName + "," + type.Assembly.GetName().Cu
 			throw new NotImplementedException();
 
 		}
 
+		public BinaryCodeBuilder EncodeFieldName(string fieldName) {
+			var builder = new BinaryCodeBuilder();
+
+			var bytes = CodeEncoding.GetBytes(fieldName);
+			uint length = (uint)bytes.Length;
+			byte lengthSizeInBytes = (byte)(GetNumberOfBytesToStoreLength(length) - 1); // Minimum is 1 byte and we start counting that value with 0, meaning 0 represents 1, 1 represents 2 etc. 
+
+			builder.AppendBit((byte)(lengthSizeInBytes % 2));
+			builder.AppendBit((byte)((lengthSizeInBytes / 2) % 2));
+
+			byte[] lengthBytes = BitConverter.GetBytes(length);
+			for (int i = 0; i <= lengthSizeInBytes; i++) {
+				builder.AppendByte(lengthBytes[i]);
+			}
+
+			builder.AppendBytes(CodeEncoding.GetBytes(fieldName));
+
+			return builder;
+		}
+		#endregion
+
+		#region Converter Functionalities Decoders
 		/// <summary>
 		/// Decoder specifically dedicated to decoding Type
 		/// </summary>
 		/// <param name="bytes">Bytes to convert from</param>
 		/// <returns>Type represented by the bytes</returns>
-		protected Type DecodeType(byte[] bytes) {
+		public Type DecodeType(byte[] bytes) {
 			throw new NotImplementedException();
 		}
+
+		public string DecodeFieldName(byte[] bytes) {
+			throw new NotImplementedException();
+		}
+		#endregion
 
 		/// <summary>
 		/// Searches through provided list in order to find a converter defined for given type
@@ -87,7 +126,7 @@ namespace BinaryConverter.models
 			return null;
 		}
 
-		#region GetEcnoder and assiociated methods
+		#region GetEncoder and assiociated methods
 		/// <summary>
 		/// Attempts to find a custom encoder for given type within defined ones
 		/// </summary>
@@ -322,21 +361,17 @@ namespace BinaryConverter.models
 				builder.AppendBit(1);
 
 				if(encoderData.ConverterType == ConverterType.INCLUSIVE_SERIALIZABLE) {
+					// Inclusive serializable, no need to encode type
 					builder.AppendBit(0);
 				}
 				else {
-					// Inclusive primitive
+					// Inclusive primitive, no need to encode type
 					builder.AppendBit(1);
 				}
 			}
 
-
 			uint length = (uint)encodedObject.Count();
-			byte lengthSizeInBytes;
-			if(length < 256) { lengthSizeInBytes = 0; }
-			else if(length < 65536) { lengthSizeInBytes = 1; }
-			else if(length < 16777216) { lengthSizeInBytes = 2; }
-			else { lengthSizeInBytes = 3; }
+			byte lengthSizeInBytes = (byte)(GetNumberOfBytesToStoreLength(length) - 1); // Minimum is 1 byte and we start counting that value with 0, meaning 0 represents 1, 1 represents 2 etc. 
 
 			builder.AppendBit((byte)(lengthSizeInBytes % 2));
 			builder.AppendBit((byte)((lengthSizeInBytes / 2) % 2));
@@ -426,8 +461,74 @@ namespace BinaryConverter.models
 			}
 		}
 
+		/// <summary>
+		/// Local object used for preventing endless encoding loops
+		/// </summary>
+		private List<object> _encodedComplexObjects = null;
 		protected virtual IEnumerable<byte> ComplexTypeEncoder(object o) {
-			throw new NotImplementedException();
+			bool firstLevelEncoding = false;
+			if(_encodedComplexObjects == null) {
+				firstLevelEncoding = true;
+				_encodedComplexObjects = new List<object>();
+			}
+
+			if (_encodedComplexObjects.Contains(o)) {
+				// Infinite encoding loop detected
+				throw new InfiniteEncodingLoopException(o, "Infinite encoding loop detected");
+			}
+
+			_encodedComplexObjects.Add(o); // Remember we already encoded this one object in particular
+
+			List<byte> result = new List<byte>();
+			Type t = o.GetType();
+
+			// Original type accessable fields (all fields apart from private fields in base types as these are not inherited)
+			var hierarchyFieldInfos = new List<FieldInfo[]>();
+			hierarchyFieldInfos.Add(t.GetFields(BindingFlags.Public | BindingFlags.Instance | BindingFlags.NonPublic));
+			Type inherited = t.BaseType;
+
+			// Base types non-public fields (later restricted to private fields only)
+			while(inherited != null && inherited != typeof(object)) {
+				hierarchyFieldInfos.Add(inherited.GetFields(BindingFlags.Instance | BindingFlags.NonPublic));
+
+				inherited = inherited.BaseType;
+			}
+
+			int hierarchyDescentCounter = 0; // How many times to go up the class parent hierarchy to get access to currently encoded private fields
+			bool originalType = true; // whether we are currently encoding fields accessable from the object type, not parent types
+			object currentlyEncodedObject;
+			BinaryCodeBuilder encodedAsBuilder;
+			BinaryCodeBuilder builder = new BinaryCodeBuilder();
+
+			foreach (var fieldArr in hierarchyFieldInfos) {
+				foreach(var field in fieldArr) {
+					if(field.IsPrivate || originalType) {
+						if(hierarchyDescentCounter > 0) {
+							for(int i = 0; i < hierarchyDescentCounter; i++) {
+								builder.AppendBit(1);
+							}
+							hierarchyDescentCounter = 0;
+						}
+						builder.AppendBit(0); // 0 indicates end of going up the class hierarchy
+
+						builder.Append(EncodeFieldName(field.Name));
+
+						currentlyEncodedObject = field.GetValue(o);
+						encodedAsBuilder = Encode(currentlyEncodedObject);
+						builder.Append(encodedAsBuilder);
+					}
+				}
+
+				hierarchyDescentCounter++;
+				originalType = false;
+			}
+
+			if (firstLevelEncoding) {
+				_encodedComplexObjects.Clear();
+				_encodedComplexObjects = null;
+			}
+
+			return builder;
 		}
 
 		public virtual object PrimitiveTypeDecoder(IEnumerable<byte> bytes) {

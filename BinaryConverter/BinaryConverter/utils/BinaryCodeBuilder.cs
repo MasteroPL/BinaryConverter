@@ -1,5 +1,6 @@
 ﻿using BinaryConverter.models;
 using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
@@ -9,7 +10,7 @@ namespace BinaryConverter.utils
 	/// <summary>
 	/// Similarly to StringBuilder, you can use it to create a binary chain bit by bit, byte by byte or mixing the two
 	/// </summary>
-	public class BinaryCodeBuilder
+	public class BinaryCodeBuilder : IEnumerable<byte>
 	{
 		/// <summary>
 		/// Points at the current bit position in the current byte (takes values only from range 0-7)
@@ -80,6 +81,30 @@ namespace BinaryConverter.utils
 			}
 		}
 
+		/// <summary>
+		/// Appends specifically the number of bits defined within provided BinaryCodeBuilder
+		/// </summary>
+		/// <param name="builder">BinaryCodeBuilder to append from</param>
+		public void Append(BinaryCodeBuilder builder) {
+			if(builder.BitPointer == 0) {
+				// Perform regular operation
+				AppendBytes(builder);
+			}
+			else {
+				// First append full bytes
+				for(int i = 0; i < builder.Bytes.Count - 1; i++) {
+					AppendByte(builder.Bytes[i]);
+				}
+				// Then the remaining bits
+				var reader = new BinaryCodeReader(new byte[] { builder.Bytes.Last() });
+				AppendBits(reader.ReadNextBits(builder.BitPointer));
+			}
+		}
+
+		public int GetBitPointer() {
+			return BitPointer;
+		}
+
 		public void Print() {
 			foreach(var b in Bytes) {
 				byte pointer = 0;
@@ -99,6 +124,25 @@ namespace BinaryConverter.utils
 
 		public ByteArrayReader ToByteArrayReadable() {
 			return new ByteArrayReader(this.Bytes);
+		}
+
+		public int ByteSize() {
+			return Bytes.Count;
+		}
+
+		public int BitSize() {
+			if(BitPointer == 0) {
+				return Bytes.Count * 8;
+			}
+			return (Bytes.Count - 1) * 8 + BitPointer;
+		}
+
+		public IEnumerator<byte> GetEnumerator() {
+			return Bytes.GetEnumerator();
+		}
+
+		IEnumerator IEnumerable.GetEnumerator() {
+			return this.GetEnumerator();
 		}
 	}
 }
