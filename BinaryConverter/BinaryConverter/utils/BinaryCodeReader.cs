@@ -158,14 +158,14 @@ namespace BinaryConverter.utils
 			short pointer = (short)(BitPointer + bitsToMove);
 			if(pointer > 7) {
 				GetNextByte();
-				BitPointer = (byte)(pointer - 8);
+				pointer = (byte)(pointer - 8);
 			}
-			if(pointer <= 0) {
+			if(pointer < 0) {
 				BytePointer -= 1;
 				if (BytePointer < 0) {
 					throw new IndexOutOfRangeException("Cannot go back in bytes history beyond the beginning of the source");
 				}
-				BitPointer = (byte)(pointer + 8);
+				pointer = (byte)(pointer + 8);
 			}
 			BitPointer = (byte)pointer;
 		}

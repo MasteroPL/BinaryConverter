@@ -243,6 +243,10 @@ namespace BinaryConverter.models
 		/// <param name="o">Object to find the encoder for</param>
 		/// <returns>An encoder method appropriate for that object</returns>
 		protected virtual BinaryEncoderData GetEncoder(object o) {
+			if(o == null) {
+				return new BinaryEncoderData(null, ConverterType.NULL);
+			}
+
 			Type objectType = o.GetType();
 			BinaryEncoderMethod encoder;
 			Func<object, IEnumerable<byte>> encoderMethod;
@@ -366,15 +370,24 @@ namespace BinaryConverter.models
 			}
 
 			BinaryEncoderData encoderData = GetSpecificEncoder(o, converterCategory);
-			IEnumerable<byte> encodedObject = encoderData.Encoder.Invoke(o);
+			IEnumerable<byte> encodedObject = null;
 
-			if (encoderData.ConverterType == ConverterType.EXCLUSIVE) {
+			if(encoderData.ConverterType == ConverterType.NULL) {
 				builder.AppendBit(0);
+				builder.AppendBit(0);
+
+				return builder;
+			}
+			else if (encoderData.ConverterType == ConverterType.EXCLUSIVE) {
+				encodedObject = encoderData.Encoder.Invoke(o);
+				builder.AppendBit(0);
+				builder.AppendBit(1);
 				byte[] typeBytes = EncodeType(o.GetType());
 				builder.Append(EncodeLength((uint)typeBytes.Length));
 				builder.AppendBytes(typeBytes);
 			}
 			else {
+				encodedObject = encoderData.Encoder.Invoke(o);
 				builder.AppendBit(1);
 
 				if(encoderData.ConverterType == ConverterType.INCLUSIVE_SERIALIZABLE) {
@@ -632,31 +645,38 @@ namespace BinaryConverter.models
 			CurrentDecodedType = null;
 
 			if(tmpByte == 0) {
-				// Exclusive
-				uint typeLength = DecodeLength(bytes);
-				Type decodedType = DecodeType(bytes.ReadNextBytes(typeLength));
-				CurrentDecodedType = decodedType;
-				object uninitialized = FormatterServices.GetUninitializedObject(decodedType);
-
-				var decoder = GetSpecificDecoder(
-					uninitialized,
-					converterCategory,
-					new ConverterCategory[] {
-						ConverterCategory.PRIMITIVE,
-						ConverterCategory.SERIALIZABLE // The only inclusive types when it comes to BinaryConverter
-					}
-				);
-
-				if(decoder != null) {
-					uint length = DecodeLength(bytes);
-					
-					object result = decoder.Decoder.Invoke(bytes.ReadNextBytes(length));
-					CurrentDecodedType = null;
-					return result;
+				tmpByte = bytes.ReadNextBit();
+				if(tmpByte == 0) {
+					// Null
+					return null;
 				}
 				else {
-					CurrentDecodedType = null;
-					throw new ArgumentException("Could not find proper decoder for that set of bytes within provided range. Type encoded as exclusive, of type " + decodedType.FullName);
+					// Exclusive
+					uint typeLength = DecodeLength(bytes);
+					Type decodedType = DecodeType(bytes.ReadNextBytes(typeLength));
+					CurrentDecodedType = decodedType;
+					object uninitialized = FormatterServices.GetUninitializedObject(decodedType);
+
+					var decoder = GetSpecificDecoder(
+						uninitialized,
+						converterCategory,
+						new ConverterCategory[] {
+							ConverterCategory.PRIMITIVE,
+							ConverterCategory.SERIALIZABLE // The only inclusive types when it comes to BinaryConverter
+						}
+					);
+
+					if (decoder != null) {
+						uint length = DecodeLength(bytes);
+
+						object result = decoder.Decoder.Invoke(bytes.ReadNextBytes(length));
+						CurrentDecodedType = null;
+						return result;
+					}
+					else {
+						CurrentDecodedType = null;
+						throw new ArgumentException("Could not find proper decoder for that set of bytes within provided range. Type encoded as exclusive, of type " + decodedType.FullName);
+					}
 				}
 			}
 			else {

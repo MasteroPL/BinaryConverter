@@ -9,6 +9,7 @@ namespace BinaryConverter.models
 	/// </summary>
 	public enum ConverterType
 	{
+		NULL = -1,
 		/// <summary>
 		/// (Non-serializable object conversion) Exclusive means, the converter returns only the binary representation of an object, without class type meta data
 		/// </summary>
