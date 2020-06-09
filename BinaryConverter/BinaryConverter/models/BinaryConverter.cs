@@ -6,7 +6,9 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using System.Runtime.Serialization;
 using System.Runtime.Serialization.Formatters.Binary;
 using System.Text;
 
@@ -23,8 +25,9 @@ namespace BinaryConverter.models
 	/// -> 5. A custom converter defined globally for given class type
 	/// -> 6. A default converter added manually to the converters list within a class
 	/// -> 7. A default converter defined within the converter class
-	/// -> 8. A default converter defined for a serializable type
-	/// -> 9. A default converter (defined within the converter class)
+	/// -> 8. A default converter defined for a primitive type
+	/// -> 9. A default converter defined for a serializable type
+	/// -> 10. A default converter (defined within the converter class)
 	/// </summary>
 	public class BinaryConverter {
 		private BinaryFormatter _binaryFormatter = new BinaryFormatter();
@@ -38,6 +41,8 @@ namespace BinaryConverter.models
 		private BinaryDecoderMethod[] _predefinedCustomDecoders;
 		private BinaryEncoderMethod[] _predefinedDefaultEncoders;
 		private BinaryDecoderMethod[] _predefinedDefaultDecoders;
+
+		protected Type CurrentDecodedType = null;
 
 		public Encoding StringEncoding { get; set; }
 		public Encoding CodeEncoding { get; set; }
@@ -54,11 +59,35 @@ namespace BinaryConverter.models
 		}
 
 		protected byte GetNumberOfBytesToStoreLength(uint length) {
-			byte lengthSizeInBytes;
 			if (length < 256) { return 1; } // length < 2^8
 			else if (length < 65536) { return 2; } // length < 2^16
 			else if (length < 16777216) { return 3; } // length < 2^24
 			else { return 4; }
+		}
+
+		protected BinaryCodeBuilder EncodeLength(uint length) {
+			byte lengthSizeInBytes = GetNumberOfBytesToStoreLength(length);
+
+			BinaryCodeBuilder builder = new BinaryCodeBuilder();
+
+			builder.AppendBit((byte)(lengthSizeInBytes % 2)); 
+			builder.AppendBit((byte)((lengthSizeInBytes / 2) % 2)); // Minimum length is 1 byte so we start counting that value with 0, meaning 0 represents 1, 1 represents 2 etc. 
+
+			byte[] lengthBytes = BitConverter.GetBytes(length);
+			for (int i = 0; i <= lengthSizeInBytes; i++) {
+				builder.AppendByte(lengthBytes[i]);
+			}
+
+			return builder;
+		}
+
+		protected uint DecodeLength(BinaryCodeReader reader) {
+			int lengthSizeInBytes = (reader.ReadNextBit() + 1) + reader.ReadNextBit() * 2;
+			var lengthBytes = new byte[4] { 0, 0, 0, 0 };
+			for (int i = 0; i < lengthSizeInBytes; i++) {
+				lengthBytes[i] = reader.ReadNextByte();
+			}
+			return BitConverter.ToUInt32(lengthBytes, 0);
 		}
 
 		#region Converter Functionalities Encoders
@@ -68,30 +97,11 @@ namespace BinaryConverter.models
 		/// <param name="type">Type to convert</param>
 		/// <returns>Bytes representation of of the type</returns>
 		public byte[] EncodeType(Type type) {
-
-			//string encoded = type.FullName + "," + type.Assembly.GetName().Cu
-			throw new NotImplementedException();
-
+			return CodeEncoding.GetBytes(type.AssemblyQualifiedName);
 		}
 
-		public BinaryCodeBuilder EncodeFieldName(string fieldName) {
-			var builder = new BinaryCodeBuilder();
-
-			var bytes = CodeEncoding.GetBytes(fieldName);
-			uint length = (uint)bytes.Length;
-			byte lengthSizeInBytes = (byte)(GetNumberOfBytesToStoreLength(length) - 1); // Minimum is 1 byte and we start counting that value with 0, meaning 0 represents 1, 1 represents 2 etc. 
-
-			builder.AppendBit((byte)(lengthSizeInBytes % 2));
-			builder.AppendBit((byte)((lengthSizeInBytes / 2) % 2));
-
-			byte[] lengthBytes = BitConverter.GetBytes(length);
-			for (int i = 0; i <= lengthSizeInBytes; i++) {
-				builder.AppendByte(lengthBytes[i]);
-			}
-
-			builder.AppendBytes(CodeEncoding.GetBytes(fieldName));
-
-			return builder;
+		public byte[] EncodeFieldName(string fieldName) {
+			return CodeEncoding.GetBytes(fieldName);
 		}
 		#endregion
 
@@ -102,11 +112,11 @@ namespace BinaryConverter.models
 		/// <param name="bytes">Bytes to convert from</param>
 		/// <returns>Type represented by the bytes</returns>
 		public Type DecodeType(byte[] bytes) {
-			throw new NotImplementedException();
+			return Type.GetType(CodeEncoding.GetString(bytes));
 		}
 
 		public string DecodeFieldName(byte[] bytes) {
-			throw new NotImplementedException();
+			return CodeEncoding.GetString(bytes);
 		}
 		#endregion
 
@@ -179,7 +189,6 @@ namespace BinaryConverter.models
 							} catch (Exception e) {
 								throw new ConverterMethodException(o, m,
 									"An error occured while attempting to use custom class encoder. " +
-									"\nObject: " + o.ToString() +
 									"\nMethod: " + m.ToString() +
 									"\nVerify whether this method is properly defined and does not produce exceptions!" +
 									"\nInner exception: " + e.ToString()
@@ -327,6 +336,12 @@ namespace BinaryConverter.models
 					encoder = GetPredefinedDefaultEncoder(o.GetType());
 					return (encoder == null) ? null : new BinaryEncoderData(encoder.Encoder);
 
+				case ConverterCategory.PRIMITIVE:
+					if (o.GetType().IsSerializable) {
+						return new BinaryEncoderData(PrimitiveTypeEncoder);
+					}
+					return null;
+
 				case ConverterCategory.SERIALIZABLE:
 					if (o.GetType().IsSerializable) {
 						return new BinaryEncoderData(SerializableTypeEncoder);
@@ -355,7 +370,9 @@ namespace BinaryConverter.models
 
 			if (encoderData.ConverterType == ConverterType.EXCLUSIVE) {
 				builder.AppendBit(0);
-				// TODO: encode type
+				byte[] typeBytes = EncodeType(o.GetType());
+				builder.Append(EncodeLength((uint)typeBytes.Length));
+				builder.AppendBytes(typeBytes);
 			}
 			else {
 				builder.AppendBit(1);
@@ -371,19 +388,302 @@ namespace BinaryConverter.models
 			}
 
 			uint length = (uint)encodedObject.Count();
-			byte lengthSizeInBytes = (byte)(GetNumberOfBytesToStoreLength(length) - 1); // Minimum is 1 byte and we start counting that value with 0, meaning 0 represents 1, 1 represents 2 etc. 
-
-			builder.AppendBit((byte)(lengthSizeInBytes % 2));
-			builder.AppendBit((byte)((lengthSizeInBytes / 2) % 2));
-
-			byte[] lengthBytes = BitConverter.GetBytes(length);
-			for(int i = 0; i <= lengthSizeInBytes; i++) {
-				builder.AppendByte(lengthBytes[i]);
-			}
+			builder.Append(EncodeLength(length));
 
 			builder.AppendBytes(encodedObject);
 
 			return builder;
+		}
+
+		#region GetDecoder and assiociated methods
+		/// <summary>
+		/// Attempts to find a custom decoder for given type within defined ones
+		/// </summary>
+		/// <param name="type">Type to look for</param>
+		/// <returns>BinaryDecoderMethod instance found or null when unable to find matching object</returns>
+		public BinaryDecoderMethod GetCustomDecoder(Type type) {
+			return SearchConvertersList<BinaryDecoderMethod>(CustomDecoders, type);
+		}
+		/// <summary>
+		/// Attempts to find a predefined custom decoder for given type within predefined ones
+		/// 
+		/// Predefined encoders are assigned upon this class initialization based on methods marked with BinaryConverterCustomEncoderMethodAttribute
+		/// </summary>
+		/// <param name="type">Type to look for</param>
+		/// <returns>BinaryEncoderMethod instance found or null when unable to find matching object</returns>
+		public BinaryDecoderMethod GetPredefinedCustomDecoder(Type type) {
+			return SearchConvertersList<BinaryDecoderMethod>(_predefinedCustomDecoders, type);
+		}
+
+		/// <summary>
+		/// Searches for a method defined in provided object as it's custom converter
+		/// </summary>
+		/// <param name="o">Object to search within</param>
+		/// <returns>Method defined as provided object's custom converter or null if not found</returns>
+		public Func<object, IEnumerable<byte>> GetCustomClassDecoder(object o) {
+			Type type = o.GetType();
+			var methods = type.GetMethods(System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+
+			foreach (var m in methods) {
+				if (m.GetCustomAttributes(typeof(CustomDecoderMethodAttribute), false).Length > 0) {
+					if (!m.IsStatic) {
+						return (input) => {
+							try {
+								return (IEnumerable<byte>)m.Invoke(o, new object[] { input });
+							} catch (Exception e) {
+								throw new ConverterMethodException(o, m,
+									"An error occured while attempting to use custom class decoder. " +
+									"\nObject: " + o.ToString() +
+									"\nMethod: " + m.ToString() +
+									"\nVerify whether this method is properly defined and does not produce exceptions!" +
+									"\nInner exception: " + e.ToString()
+								, e);
+							}
+						};
+					}
+					else {
+						return (input) => {
+							try {
+								return (IEnumerable<byte>)m.Invoke(null, new object[] { input });
+							} catch (Exception e) {
+								throw new ConverterMethodException(o, m,
+									"An error occured while attempting to use custom class decoder. " +
+									"\nMethod: " + m.ToString() +
+									"\nVerify whether this method is properly defined and does not produce exceptions!" +
+									"\nInner exception: " + e.ToString()
+								, e);
+							}
+						};
+					}
+				}
+			}
+
+			return null;
+		}
+
+		/// <summary>
+		/// Searches for a globally defined decoder method for given type
+		/// </summary>
+		/// <param name="type">Type to search through</param>
+		/// <returns>Decoder method or null if not found</returns>
+		public Func<IEnumerable<byte>, object> GetGlobalClassDecoder(Type type) {
+			var attribute = type.GetCustomAttributes(
+				typeof(ClassDecoderAttribute),
+				false // Not considering inheritance (attribute cannot be inherited)
+			).FirstOrDefault() as ClassDecoderAttribute;
+
+			if (attribute != default(ClassDecoderAttribute)) {
+				return attribute.Decoder;
+			}
+			return null;
+		}
+
+		/// <summary>
+		/// Attempts to find a default decoder for given type within defined ones
+		/// </summary>
+		/// <param name="type">Type to look for</param>
+		/// <returns>BinaryDecoderMethod instance found or null when unable to find matching object</returns>
+		public BinaryDecoderMethod GetDefaultDecoder(Type type) {
+			return SearchConvertersList<BinaryDecoderMethod>(DefaultDecoders, type);
+		}
+
+		/// <summary>
+		/// Attempts to find a default decoder for given type within predefined ones
+		/// </summary>
+		/// <param name="type">Type to look for</param>
+		/// <returns>BinaryDecoderMethod instance found or null when unable to find matching object</returns>
+		public BinaryDecoderMethod GetPredefinedDefaultDecoder(Type type) {
+			return SearchConvertersList<BinaryDecoderMethod>(_predefinedDefaultDecoders, type);
+		}
+
+		/// <summary>
+		/// Finds the appropriate decoder for provided object
+		/// </summary>
+		/// <param name="o">Object to find the decoder for</param>
+		/// <returns>An decoder method appropriate for that object</returns>
+		protected virtual BinaryDecoderData GetDecoder(object o, ConverterCategory[] disallowed = null) {
+			Type objectType = o.GetType();
+			BinaryDecoderMethod decoder;
+			Func<IEnumerable<byte>, object> decoderMethod;
+
+			if (disallowed == null) disallowed = new ConverterCategory[] { };
+
+			// Step 1. Looking for a custom converter added manually to the converters list
+			decoder = GetCustomDecoder(objectType);
+			if (decoder != null && !disallowed.Contains(ConverterCategory.CUSTOM)) {
+				// Found the appropriate decoder
+				return new BinaryDecoderData(decoder.Decoder);
+			}
+
+			//  Step 2. Looking for a custom converter defined within the converter class
+			decoder = GetPredefinedCustomDecoder(objectType);
+			if (decoder != null && !disallowed.Contains(ConverterCategory.CUSTOM_PREDEFINED)) {
+				// Found the appropriate decoder
+				return new BinaryDecoderData(decoder.Decoder);
+			}
+
+			// Step 3. Looking for a custom converter defined within the converted class
+			decoderMethod = GetCustomClassDecoder(o);
+			if (decoderMethod != null && !disallowed.Contains(ConverterCategory.CUSTOM_FOR_CLASS)) {
+				return new BinaryDecoderData(decoderMethod);
+			}
+
+			// Step 4. Looking for a global converter defined for the class
+			decoderMethod = GetGlobalClassDecoder(objectType);
+			if (decoderMethod != null && !disallowed.Contains(ConverterCategory.GLOBAL_FOR_CLASS)) {
+				return new BinaryDecoderData(decoderMethod);
+			}
+
+			// Step 5. Looking for a default converter added manually to the converters list
+			decoder = GetDefaultDecoder(objectType);
+			if (decoder != null && !disallowed.Contains(ConverterCategory.DEFAULT)) {
+				return new BinaryDecoderData(decoder.Decoder);
+			}
+
+			// Step 6. Looking for a default converter defined within the converter class
+			decoder = GetPredefinedDefaultDecoder(objectType);
+			if (decoder != null && !disallowed.Contains(ConverterCategory.DEFAULT_PREDEFINED)) {
+				return new BinaryDecoderData(decoder.Decoder);
+			}
+
+			// Step 7. Attempting a converter for a primitive type
+			if (objectType.IsPrimitive && !disallowed.Contains(ConverterCategory.PRIMITIVE)) {
+				return new BinaryDecoderData(PrimitiveTypeDecoder, ConverterType.INCLUSIVE_PRIMITIVE);
+			}
+
+			// Step 8. Attempting a converter for a serializable type
+			if (objectType.IsSerializable && !disallowed.Contains(ConverterCategory.SERIALIZABLE)) {
+				return new BinaryDecoderData(SerializableTypeDecoder, ConverterType.INCLUSIVE_SERIALIZABLE);
+			}
+
+			// Step 9. None of the above is valid, apply the default decoder
+			if(!disallowed.Contains(ConverterCategory.COMPLEX))
+				return new BinaryDecoderData(ComplexTypeDecoder);
+
+			return null;
+		}
+
+		/// <summary>
+		/// Finds the appriopriate decoder within specified category
+		/// </summary>
+		/// <param name="o">Object to find the decoder for</param>
+		/// <param name="category">Category of decoders to consider</param>
+		/// <returns>An encoder method appropriate for that object or null if not found</returns>
+		protected virtual BinaryDecoderData GetSpecificDecoder(object o, ConverterCategory category, ConverterCategory[] disallowed = null) {
+			BinaryDecoderMethod decoder;
+			Func<IEnumerable<byte>, object> decoderMethod;
+
+			if (disallowed == null) disallowed = new ConverterCategory[] { };
+
+			switch (category) {
+				case ConverterCategory.ANY:
+					return GetDecoder(o);
+
+				case ConverterCategory.CUSTOM:
+					decoder = GetCustomDecoder(o.GetType());
+					return (decoder == null && !disallowed.Contains(ConverterCategory.CUSTOM)) ? null : new BinaryDecoderData(decoder.Decoder);
+
+				case ConverterCategory.CUSTOM_PREDEFINED:
+					decoder = GetPredefinedCustomDecoder(o.GetType());
+					return (decoder == null && !disallowed.Contains(ConverterCategory.CUSTOM_PREDEFINED)) ? null : new BinaryDecoderData(decoder.Decoder);
+
+				case ConverterCategory.CUSTOM_FOR_CLASS:
+					decoderMethod = GetCustomClassEncoder(o);
+					return (decoderMethod == null && !disallowed.Contains(ConverterCategory.CUSTOM_FOR_CLASS)) ? null : new BinaryDecoderData(decoderMethod);
+
+				case ConverterCategory.GLOBAL_FOR_CLASS:
+					decoderMethod = GetGlobalClassDecoder(o.GetType());
+					return (decoderMethod == null && !disallowed.Contains(ConverterCategory.GLOBAL_FOR_CLASS)) ? null : new BinaryDecoderData(decoderMethod);
+
+				case ConverterCategory.DEFAULT:
+					decoder = GetDefaultDecoder(o.GetType());
+					return (decoder == null && !disallowed.Contains(ConverterCategory.DEFAULT)) ? null : new BinaryDecoderData(decoder.Decoder);
+
+				case ConverterCategory.DEFAULT_PREDEFINED:
+					decoder = GetPredefinedDefaultDecoder(o.GetType());
+					return (decoder == null && !disallowed.Contains(ConverterCategory.DEFAULT_PREDEFINED)) ? null : new BinaryDecoderData(decoder.Decoder);
+
+				case ConverterCategory.PRIMITIVE:
+					if (o.GetType().IsPrimitive && !disallowed.Contains(ConverterCategory.PRIMITIVE)) {
+						return new BinaryDecoderData(PrimitiveTypeDecoder);
+					}
+					return null;
+
+				case ConverterCategory.SERIALIZABLE:
+					if (o.GetType().IsSerializable && !disallowed.Contains(ConverterCategory.SERIALIZABLE)) {
+						return new BinaryDecoderData(SerializableTypeDecoder);
+					}
+					return null;
+
+				case ConverterCategory.COMPLEX:
+					if (!o.GetType().IsPrimitive && !disallowed.Contains(ConverterCategory.COMPLEX)) {
+						return new BinaryDecoderData(ComplexTypeDecoder);
+					}
+					return null;
+
+				default:
+					throw new NotImplementedException("Provided category was not implemented");
+			}
+		}
+		#endregion
+
+		public virtual object Decode(BinaryCodeReader bytes, ConverterCategory converterCategory = ConverterCategory.ANY) {
+			byte tmpByte = bytes.ReadNextBit();
+			CurrentDecodedType = null;
+
+			if(tmpByte == 0) {
+				// Exclusive
+				uint typeLength = DecodeLength(bytes);
+				Type decodedType = DecodeType(bytes.ReadNextBytes(typeLength));
+				CurrentDecodedType = decodedType;
+				object uninitialized = FormatterServices.GetUninitializedObject(decodedType);
+
+				var decoder = GetSpecificDecoder(
+					uninitialized,
+					converterCategory,
+					new ConverterCategory[] {
+						ConverterCategory.PRIMITIVE,
+						ConverterCategory.SERIALIZABLE // The only inclusive types when it comes to BinaryConverter
+					}
+				);
+
+				if(decoder != null) {
+					uint length = DecodeLength(bytes);
+					
+					object result = decoder.Decoder.Invoke(bytes.ReadNextBytes(length));
+					CurrentDecodedType = null;
+					return result;
+				}
+				else {
+					CurrentDecodedType = null;
+					throw new ArgumentException("Could not find proper decoder for that set of bytes within provided range. Type encoded as exclusive, of type " + decodedType.FullName);
+				}
+			}
+			else {
+				tmpByte = bytes.ReadNextBit();
+
+				if(tmpByte == 0) {
+					// Inclusive serializable
+					if(converterCategory != ConverterCategory.ANY && converterCategory != ConverterCategory.SERIALIZABLE) {
+						throw new ArgumentException("Object is encoded as inclusive serializable, requested converter category not allowing for that kind of conversion");
+					}
+
+					uint length = DecodeLength(bytes);
+					return SerializableTypeDecoder(bytes.ReadNextBytes(length));
+				}
+				else {
+					// Inclusive serializable
+					if (converterCategory != ConverterCategory.ANY && converterCategory != ConverterCategory.PRIMITIVE) {
+						throw new ArgumentException("Object is encoded as inclusive primitive, requested converter category not allowing for that kind of conversion");
+					}
+
+					uint length = DecodeLength(bytes);
+					return PrimitiveTypeDecoder(bytes.ReadNextBytes(length));
+				}
+			}
+		}
+		public virtual object Decode(byte[] bytes, ConverterCategory converterCategory = ConverterCategory.ANY) {
+			return Decode(new BinaryCodeReader(bytes), converterCategory);
 		}
 
 		protected virtual IEnumerable<byte> PrimitiveTypeEncoder(object o) {
@@ -511,7 +811,9 @@ namespace BinaryConverter.models
 						}
 						builder.AppendBit(0); // 0 indicates end of going up the class hierarchy
 
-						builder.Append(EncodeFieldName(field.Name));
+						byte[] bytes = EncodeFieldName(field.Name);
+						builder.Append(EncodeLength((uint)bytes.Length));
+						builder.AppendBytes(bytes);
 
 						currentlyEncodedObject = field.GetValue(o);
 						encodedAsBuilder = Encode(currentlyEncodedObject);
@@ -529,6 +831,36 @@ namespace BinaryConverter.models
 			}
 
 			return builder;
+		}
+
+		protected virtual object ComplexTypeDecoder(IEnumerable<byte> bytes) {
+			Type currentType = CurrentDecodedType;
+			object uninitialized = FormatterServices.GetUninitializedObject(currentType);
+			BinaryCodeReader reader = new BinaryCodeReader(bytes);
+			uint length;
+			string fieldName;
+			object value;
+
+			while (!reader.EndOfSource()) {
+				while(reader.ReadNextBit() == 1) {
+					currentType = currentType.BaseType;
+
+					if(currentType == null) {
+						// TODO: throw valid exception
+					}
+				}
+
+				length = DecodeLength(reader);
+				fieldName = DecodeFieldName(reader.ReadNextBytes(length));
+				var prop = currentType.GetField(
+					fieldName, 
+					BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Public
+				);
+				value = Decode(reader);
+				prop.SetValue(uninitialized, value);
+			}
+
+			return uninitialized;
 		}
 
 		public virtual object PrimitiveTypeDecoder(IEnumerable<byte> bytes) {

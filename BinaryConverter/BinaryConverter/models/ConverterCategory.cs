@@ -35,12 +35,16 @@ namespace BinaryConverter.models
 		/// </summary>
 		DEFAULT_PREDEFINED = 7,
 		/// <summary>
-		/// 8. A default converter defined for a serializable type
+		/// 8. A default converter defined for a primitive type
 		/// </summary>
-		SERIALIZABLE = 8,
+		PRIMITIVE = 8,
 		/// <summary>
-		/// 9. A default converter (defined within the converter class)
+		/// 9. A default converter defined for a serializable type
 		/// </summary>
-		COMPLEX = 9
+		SERIALIZABLE = 9,
+		/// <summary>
+		/// 10. A default converter (defined within the converter class)
+		/// </summary>
+		COMPLEX = 10
 	}
 }

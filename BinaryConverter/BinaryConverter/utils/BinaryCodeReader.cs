@@ -9,8 +9,10 @@ namespace BinaryConverter.utils
 	public class BinaryCodeReader
 	{
 		private IBinaryReadable Source;
-		private byte BitPointer = 0;
+		public byte BitPointer { private set; get; }
 		private byte CurrentByte;
+		public int BytePointer { private set; get; }
+		private List<byte> BytesHistory = new List<byte>();
 
 		public BinaryCodeReader(IBinaryReadable source) {
 			if (source == null) {
@@ -18,6 +20,8 @@ namespace BinaryConverter.utils
 			}
 
 			Source = source;
+			BytePointer = 0;
+			BitPointer = 0;
 		}
 		public BinaryCodeReader(IEnumerable<byte> source) {
 			if (source == null) {
@@ -25,24 +29,47 @@ namespace BinaryConverter.utils
 			}
 
 			Source = new ByteArrayReader(source);
+			BytePointer = 0;
+			BitPointer = 0;
 		}
+
+		protected byte GetNextByte() {
+			if (BytePointer == BytesHistory.Count) {
+				if (!Source.EndOfSource()) {
+					CurrentByte = Source.GetNextByte();
+					BytesHistory.Add(CurrentByte);
+					BytePointer++;
+					return CurrentByte;
+				}
+				else {
+					throw new IndexOutOfRangeException("Attempted to read beyond source range");
+				}
+			}
+			else {
+				BytePointer++;
+				CurrentByte = BytesHistory[BytePointer - 1];
+				return CurrentByte;
+			}			
+		}
+
 		/// <summary>
 		/// Reads next single bit from the source
 		/// </summary>
 		/// <returns>A value of that single bit (either 1 or 0)</returns>
 		public byte ReadNextBit() {
 			byte result;
-			int conjuctor = 1; // for the sake of not converting to byte
+			int conjuctor = 1; // for the sake of not converting to byte it's as int
 
 			// Special case, requires reading the next byte from source
-			if(BitPointer == 0) {
-				CurrentByte = Source.GetNextByte();
+			if (BitPointer == 0) {
+				CurrentByte = GetNextByte();
 			}
 
 			conjuctor = (conjuctor << BitPointer);
 			result = (byte)((CurrentByte & conjuctor) >> BitPointer);
 
 			BitPointer = (BitPointer == 7) ? (byte)0 : (byte)(BitPointer + 1);
+			
 
 			return result;
 		}
@@ -68,12 +95,12 @@ namespace BinaryConverter.utils
 		public byte ReadNextByte() {
 			// Special case that requires us to do absolutely nothing
 			if(BitPointer == 0) {
-				CurrentByte = Source.GetNextByte();
+				GetNextByte();
 				return CurrentByte;
 			}
 
 			byte result = (byte)(CurrentByte >> BitPointer);
-			CurrentByte = Source.GetNextByte();
+			GetNextByte();
 			result += (byte)(CurrentByte << (8 - BitPointer));
 
 			return result;
@@ -94,7 +121,57 @@ namespace BinaryConverter.utils
 		}
 
 		public bool EndOfSource() {
-			return Source.EndOfSource();
+			if (BytePointer == BytesHistory.Count) {
+				return Source.EndOfSource();
+			}
+			else {
+				return false;
+			}
+		}
+
+		public bool EndOfBits() {
+			if(EndOfSource() && BitPointer == 0) {
+				return true;
+			}
+			return false;
+		}
+
+		public void MoveBitPointer(int offset) {
+			int bytesToMove = offset / 8;
+			int bitsToMove = offset - bytesToMove * 8;
+
+			if (BytePointer + bytesToMove <= BytesHistory.Count) {
+				if (BytePointer + bytesToMove < 0) {
+					throw new IndexOutOfRangeException("Cannot go back in bytes history beyond the beginning of the source");
+				}
+				BytePointer += bytesToMove;
+			}
+			else {
+				int remainingBytesOffset = BytePointer + bytesToMove - BytesHistory.Count;
+				BytePointer = BytesHistory.Count;
+
+				for(int i = 0; i < remainingBytesOffset; i++) {
+					GetNextByte();
+				}
+			}
+
+			short pointer = (short)(BitPointer + bitsToMove);
+			if(pointer > 7) {
+				GetNextByte();
+				BitPointer = (byte)(pointer - 8);
+			}
+			if(pointer <= 0) {
+				BytePointer -= 1;
+				if (BytePointer < 0) {
+					throw new IndexOutOfRangeException("Cannot go back in bytes history beyond the beginning of the source");
+				}
+				BitPointer = (byte)(pointer + 8);
+			}
+			BitPointer = (byte)pointer;
+		}
+
+		public void MoveBytePointer(int offset) {
+			MoveBitPointer(offset * 8);
 		}
 	}
 }
